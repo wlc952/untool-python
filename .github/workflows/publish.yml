@@ -1,18 +1,14 @@
 name: Publish Python Package
 
 on:
-  # 1. push tag 时，只发到 TestPyPI
   push:
     tags:
       - 'v*.*.*'
-
-  # 2. 发布 GitHub Release 时，发到 PyPI
   release:
-    types:
-      - published
+    types: [published]
 
 jobs:
-  build:
+  publish:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -27,27 +23,12 @@ jobs:
         run: |
           python -m pip install --upgrade pip setuptools wheel build twine
 
-      - name: Build dist
+      - name: Build distribution
         run: |
           python -m build --sdist --wheel
 
-  publish-testpypi:
-    needs: build
-    if: github.event_name == 'push'
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Setup Python
-        uses: actions/setup-python@v4
-        with:
-          python-version: '3.x'
-
-      - name: Install twine
-        run: python -m pip install --upgrade pip twine
-
       - name: Publish to TestPyPI
+        if: github.event_name == 'push'
         env:
           TEST_PYPI_API_TOKEN: ${{ secrets.TEST_PYPI_API_TOKEN }}
         run: |
@@ -58,23 +39,8 @@ jobs:
             -p "$TEST_PYPI_API_TOKEN" \
             dist/*
 
-  publish-pypi:
-    needs: build
-    if: github.event_name == 'release' && github.event.action == 'published'
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Setup Python
-        uses: actions/setup-python@v4
-        with:
-          python-version: '3.x'
-
-      - name: Install twine
-        run: python -m pip install --upgrade pip twine
-
       - name: Publish to PyPI
+        if: github.event_name == 'release'
         env:
           PYPI_API_TOKEN: ${{ secrets.PYPI_API_TOKEN }}
         run: |
