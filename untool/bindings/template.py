@@ -1,21 +1,47 @@
-import ctypes
-import numpy as np
 import os
-from ..core.platform import load_library
+import ctypes
+import platform
+import numpy as np
 
 # 常量定义
-MAX_DIMS          = 6
-MAX_SHAPE_NUM     = 6
+MAX_SHAPE_NUM     = 8
 MAX_TENSOR_NUM    = 64
-MAX_CMD_GROUP_NUM = 64
 MAX_STAGE_NUM     = 64
 MAX_CHAR_NUM      = 128
 MAX_NET_NUM       = 256
 
 # 初始化库
-# 初始化库和设置函数
+def get_lib_path(mode=None):
+    arch = platform.machine()
+    if mode is None:
+        if os.environ.get("UNTOOL_MODE"):
+            mode = os.environ.get("UNTOOL_MODE")
+        else:
+            if arch == 'aarch64':
+                mode = 'soc'  # aarch64默认使用soc模式
+            else:
+                mode = 'pcie'  # x86_64默认使用pcie模式
+    if arch == 'x86_64' and mode == 'soc':
+        raise RuntimeError("x86_64平台不支持SOC模式")
+    # 查找库的位置
+    # 1. 先检查环境变量
+    if os.environ.get("UNTOOL_LIB_PATH"):
+        return os.environ.get("UNTOOL_LIB_PATH")
+    # 2. 再检查包内预编译库
+    package_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    lib_path = os.path.join(package_dir, 'libs', arch, mode, 'libuntool.so')
+    if os.path.exists(lib_path):
+        return lib_path
+    # 3. 最后尝试系统安装路径
+    system_lib_path = "/opt/untool/lib/libuntool.so"
+    if os.path.exists(system_lib_path):
+        return system_lib_path
+    raise FileNotFoundError(f"找不到适用于 {arch}/{mode} 的libuntool.so库")
+    
 try:
-    _lib = load_library()
+    mode = os.environ.get("UNTOOL_MODE", "soc")
+    lib_path = get_lib_path(mode)
+    lib = ctypes.CDLL(lib_path)
 except Exception as e:
     print(f"警告: 初始化untool库失败，可能需要手动设置正确的模式: {e}")
 
@@ -199,7 +225,6 @@ def convert_to_python(data, shape=None, dtype=None, bf16=False):
       - 如果提供 shape 和 dtype，则视为数组转换，返回 NumPy 数组；
         如果 bf16 为 True，则认为数据以 bfloat16 形式存储，使用 make_c2np_fp32_from_bf16 将其转换为 float32 的 NumPy 数组。
       - 如果不提供 shape 和 dtype，则视为标量转换，返回对应的 Python 对象（通过指针内容）。
-      - 如果 data 是 ctypes 的 char* 指针，则转换为字符串。
 
     参数:
       data: ctypes 指针
@@ -208,19 +233,14 @@ def convert_to_python(data, shape=None, dtype=None, bf16=False):
       bf16: 布尔值，指示是否将 bfloat16 数据转换为 float32 数组（仅在 shape 和 dtype 被提供时有效）
 
     返回:
-      对应的 Python 对象（NumPy 数组、标量或字符串）
+      对应的 Python 对象（NumPy 数组或标量）
     """
-    if isinstance(data, ctypes.c_char_p):
-        return char_point_2_str(data)
-    
-    if shape is not None and dtype is not None:
-        if bf16:
-            return make_c2np_fp32_from_bf16(data, shape)
-        else:
-            return make_c2np(data, shape, dtype)
-    
     try:
+        if shape is not None and dtype is not None:
+            if bf16:
+                return make_c2np_fp32_from_bf16(data, shape)
+            else:
+                return make_c2np(data, shape, dtype)
         return data.contents
     except Exception as e:
         raise ValueError("无法转换数据为 Python 对象，可能缺少必要的元数据信息（例如 shape, dtype）") from e
-

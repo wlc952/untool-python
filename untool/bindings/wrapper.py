@@ -1,21 +1,47 @@
-import ctypes
-import numpy as np
 import os
-from ..core.platform import load_library
+import ctypes
+import platform
+import numpy as np
 
 # 常量定义
-MAX_DIMS          = 6
-MAX_SHAPE_NUM     = 6
+MAX_SHAPE_NUM     = 8
 MAX_TENSOR_NUM    = 64
-MAX_CMD_GROUP_NUM = 64
 MAX_STAGE_NUM     = 64
 MAX_CHAR_NUM      = 128
 MAX_NET_NUM       = 256
 
 # 初始化库
-# 初始化库和设置函数
+def get_lib_path(mode=None):
+    arch = platform.machine()
+    if mode is None:
+        if os.environ.get("UNTOOL_MODE"):
+            mode = os.environ.get("UNTOOL_MODE")
+        else:
+            if arch == 'aarch64':
+                mode = 'soc'  # aarch64默认使用soc模式
+            else:
+                mode = 'pcie'  # x86_64默认使用pcie模式
+    if arch == 'x86_64' and mode == 'soc':
+        raise RuntimeError("x86_64平台不支持SOC模式")
+    # 查找库的位置
+    # 1. 先检查环境变量
+    if os.environ.get("UNTOOL_LIB_PATH"):
+        return os.environ.get("UNTOOL_LIB_PATH")
+    # 2. 再检查包内预编译库
+    package_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    lib_path = os.path.join(package_dir, 'libs', arch, mode, 'libuntool.so')
+    if os.path.exists(lib_path):
+        return lib_path
+    # 3. 最后尝试系统安装路径
+    system_lib_path = "/opt/untool/lib/libuntool.so"
+    if os.path.exists(system_lib_path):
+        return system_lib_path
+    raise FileNotFoundError(f"找不到适用于 {arch}/{mode} 的libuntool.so库")
+    
 try:
-    _lib = load_library()
+    mode = os.environ.get("UNTOOL_MODE", "soc")
+    lib_path = get_lib_path(mode)
+    lib = ctypes.CDLL(lib_path)
 except Exception as e:
     print(f"警告: 初始化untool库失败，可能需要手动设置正确的模式: {e}")
 
@@ -199,7 +225,6 @@ def convert_to_python(data, shape=None, dtype=None, bf16=False):
       - 如果提供 shape 和 dtype，则视为数组转换，返回 NumPy 数组；
         如果 bf16 为 True，则认为数据以 bfloat16 形式存储，使用 make_c2np_fp32_from_bf16 将其转换为 float32 的 NumPy 数组。
       - 如果不提供 shape 和 dtype，则视为标量转换，返回对应的 Python 对象（通过指针内容）。
-      - 如果 data 是 ctypes 的 char* 指针，则转换为字符串。
 
     参数:
       data: ctypes 指针
@@ -208,29 +233,24 @@ def convert_to_python(data, shape=None, dtype=None, bf16=False):
       bf16: 布尔值，指示是否将 bfloat16 数据转换为 float32 数组（仅在 shape 和 dtype 被提供时有效）
 
     返回:
-      对应的 Python 对象（NumPy 数组、标量或字符串）
+      对应的 Python 对象（NumPy 数组或标量）
     """
-    if isinstance(data, ctypes.c_char_p):
-        return char_point_2_str(data)
-    
-    if shape is not None and dtype is not None:
-        if bf16:
-            return make_c2np_fp32_from_bf16(data, shape)
-        else:
-            return make_c2np(data, shape, dtype)
-    
     try:
+        if shape is not None and dtype is not None:
+            if bf16:
+                return make_c2np_fp32_from_bf16(data, shape)
+            else:
+                return make_c2np(data, shape, dtype)
         return data.contents
     except Exception as e:
         raise ValueError("无法转换数据为 Python 对象，可能缺少必要的元数据信息（例如 shape, dtype）") from e
-
 class UnTensor(ctypes.Structure):
     _fields_ = [
         ('name', ctypes.c_char * MAX_CHAR_NUM),
         ('dtype', ctypes.c_int),
         ('size', ctypes.c_size_t),
         ('dims', ctypes.c_size_t),
-        ('shape', ctypes.c_uint64 * MAX_DIMS),
+        ('shape', ctypes.c_uint64 * MAX_SHAPE_NUM),
         ('data', ctypes.c_void_p),
         ('is_malloc_host', ctypes.c_bool),
         ('is_have_data', ctypes.c_bool),
@@ -246,6 +266,168 @@ class UnTensor(ctypes.Structure):
         ('rawflags', ctypes.c_uint),
     ]
 
+class CDeviceMem(ctypes.Structure):
+    _fields_ = [
+        ('addr', ctypes.c_uint64),
+        ('size', ctypes.c_uint),
+        ('reserved', ctypes.c_uint),
+        ('rawflags', ctypes.c_uint),
+        ('dmabuf_fd', ctypes.c_int),
+    ]
+
+class CTensorInfo(ctypes.Structure):
+    _fields_ = [
+        ('name', ctypes.c_char * MAX_CHAR_NUM),
+        ('data_type', ctypes.c_int),
+        ('device_addr', ctypes.c_uint64),
+        ('size', ctypes.c_uint64),
+        ('dims', ctypes.c_size_t),
+        ('shape', ctypes.c_uint64 * MAX_SHAPE_NUM),
+    ]
+
+class CStageInfo(ctypes.Structure):
+    _fields_ = [
+        ('input_num', ctypes.c_size_t),
+        ('output_num', ctypes.c_size_t),
+        ('input_tensor', CTensorInfo * MAX_TENSOR_NUM),
+        ('output_tensor', CTensorInfo * MAX_TENSOR_NUM),
+        ('input_tensor_global_addr', ctypes.c_uint64 * MAX_TENSOR_NUM),
+        ('output_tensor_global_addr', ctypes.c_uint64 * MAX_TENSOR_NUM),
+        ('io_alone', ctypes.c_bool),
+        ('io_addr', ctypes.c_uint64),
+        ('io_size', ctypes.c_uint64),
+        ('io_offset', ctypes.c_uint64),
+        ('io_global_addr', ctypes.c_uint64),
+        ('neuron_addr', ctypes.c_uint64),
+        ('neuron_size', ctypes.c_uint64),
+        ('neuron_offset', ctypes.c_uint64),
+        ('io_device', CDeviceMem),
+    ]
+
+class CNetInfo(ctypes.Structure):
+    _fields_ = [
+        ('name', ctypes.c_char * MAX_CHAR_NUM),
+        ('stage_num', ctypes.c_size_t),
+        ('stages', CStageInfo * MAX_STAGE_NUM),
+        ('addr_mode', ctypes.c_int),
+    ]
+
+class CModelInfo(ctypes.Structure):
+    _fields_ = [
+        ('device_id', ctypes.c_int),
+        ('bm_handle', ctypes.c_void_p),
+        ('net_num', ctypes.c_size_t),
+        ('nets', CNetInfo * MAX_NET_NUM),
+        ('neuron_device', CDeviceMem),
+    ]
+
+
+lib.convert_model_info.restype  = ctypes.POINTER(CModelInfo)
+lib.convert_model_info.argtypes = [ctypes.c_void_p]
+def convert_model_info(model_info_p) -> ctypes.POINTER(CModelInfo):
+    """
+    struct C_ModelInfo* convert_model_info(struct ModelInfo* model_info_p);
+    :param model_info_p: 	ctypes.c_void_p
+    """
+    return lib.convert_model_info(model_info_p)
+
+lib.get_model_info_p.restype  = ctypes.c_void_p
+lib.get_model_info_p.argtypes = [ctypes.c_char_p, ctypes.c_int]
+def get_model_info_p(filename, device_id) -> ctypes.c_void_p:
+    """
+    struct ModelInfo* get_model_info_p(const char* filename, int device_id);
+    :param filename: 	ctypes.c_char_p
+    :param device_id: 	ctypes.c_int
+    """
+    return lib.get_model_info_p(str2char_point(filename), ctypes.c_int(device_id))
+
+lib.find_net_num.restype  = ctypes.c_int
+lib.find_net_num.argtypes = [ctypes.c_void_p, ctypes.c_char_p]
+def find_net_num(model_info_p, net_name) -> ctypes.c_int:
+    """
+    int find_net_num(struct ModelInfo* model_info_p, const char* net_name);
+    :param model_info_p: 	ctypes.c_void_p
+    :param net_name: 	ctypes.c_char_p
+    """
+    return lib.find_net_num(model_info_p, str2char_point(net_name))
+
+lib.get_first_mask_ptr.restype  = ctypes.c_void_p
+lib.get_first_mask_ptr.argtypes = [ctypes.c_size_t, ctypes.c_size_t, ctypes.c_bool]
+def get_first_mask_ptr(seq_len, token_len, bf16) -> ctypes.c_void_p:
+    """
+    void* get_first_mask_ptr(size_t seq_len, size_t token_len, bool bf16);
+    :param seq_len: 	ctypes.c_size_t
+    :param token_len: 	ctypes.c_size_t
+    :param bf16: 	ctypes.c_bool
+    """
+    return lib.get_first_mask_ptr(ctypes.c_size_t(seq_len), ctypes.c_size_t(token_len), bf16)
+
+lib.get_next_mask_ptr.restype  = ctypes.c_void_p
+lib.get_next_mask_ptr.argtypes = [ctypes.c_size_t, ctypes.c_size_t, ctypes.c_bool]
+def get_next_mask_ptr(seq_len, token_len, bf16) -> ctypes.c_void_p:
+    """
+    void* get_next_mask_ptr(size_t seq_len, size_t token_len, bool bf16);
+    :param seq_len: 	ctypes.c_size_t
+    :param token_len: 	ctypes.c_size_t
+    :param bf16: 	ctypes.c_bool
+    """
+    return lib.get_next_mask_ptr(ctypes.c_size_t(seq_len), ctypes.c_size_t(token_len), bf16)
+
+lib.free_mask_ptr.restype  = None
+lib.free_mask_ptr.argtypes = [ctypes.c_void_p]
+def free_mask_ptr(ptr) -> None:
+    """
+    void free_mask_ptr(void* ptr);
+    :param ptr: 	ctypes.c_void_p
+    """
+    return lib.free_mask_ptr(ptr)
+
+lib.move_to_device.restype  = None
+lib.move_to_device.argtypes = [ctypes.c_void_p]
+def move_to_device(model_info_p) -> None:
+    """
+    void move_to_device(struct ModelInfo* model_info_p);
+    :param model_info_p: 	ctypes.c_void_p
+    """
+    return lib.move_to_device(model_info_p)
+
+lib.compile_io_addr.restype  = None
+lib.compile_io_addr.argtypes = [ctypes.c_void_p]
+def compile_io_addr(model_info_p) -> None:
+    """
+    void compile_io_addr(struct ModelInfo* model_info_p);
+    :param model_info_p: 	ctypes.c_void_p
+    """
+    return lib.compile_io_addr(model_info_p)
+
+lib.fill_api_info.restype  = None
+lib.fill_api_info.argtypes = [ctypes.c_void_p]
+def fill_api_info(model_info_p) -> None:
+    """
+    void fill_api_info(struct ModelInfo* model_info_p);
+    :param model_info_p: 	ctypes.c_void_p
+    """
+    return lib.fill_api_info(model_info_p)
+
+lib.run_model.restype  = None
+lib.run_model.argtypes = [ctypes.c_void_p, ctypes.c_size_t, ctypes.c_size_t]
+def run_model(model_info_p, net_idx, stage_idx) -> None:
+    """
+    void run_model(struct ModelInfo* model_info_p, size_t net_idx, size_t stage_idx);
+    :param model_info_p: 	ctypes.c_void_p
+    :param net_idx: 	ctypes.c_size_t
+    :param stage_idx: 	ctypes.c_size_t
+    """
+    return lib.run_model(model_info_p, ctypes.c_size_t(net_idx), ctypes.c_size_t(stage_idx))
+
+lib.free_model.restype  = None
+lib.free_model.argtypes = [ctypes.c_void_p]
+def free_model(model_info_p) -> None:
+    """
+    void free_model(struct ModelInfo* model_info_p);
+    :param model_info_p: 	ctypes.c_void_p
+    """
+    return lib.free_model(model_info_p)
 
 lib.untensor_create.restype  = ctypes.POINTER(UnTensor)
 def untensor_create() -> ctypes.POINTER(UnTensor):
@@ -264,6 +446,15 @@ def untensor_copy(src, copy_host_data) -> ctypes.POINTER(UnTensor):
     """
     return lib.untensor_copy(src, copy_host_data)
 
+lib.untensor_init.restype  = None
+lib.untensor_init.argtypes = [ctypes.POINTER(UnTensor)]
+def untensor_init(tensor) -> None:
+    """
+    void untensor_init(untensor tensor);
+    :param tensor: 	ctypes.POINTER(UnTensor)
+    """
+    return lib.untensor_init(tensor)
+
 lib.untensor_destroy.restype  = None
 lib.untensor_destroy.argtypes = [ctypes.POINTER(UnTensor)]
 def untensor_destroy(tensor) -> None:
@@ -272,6 +463,17 @@ def untensor_destroy(tensor) -> None:
     :param tensor: 	ctypes.POINTER(UnTensor)
     """
     return lib.untensor_destroy(tensor)
+
+lib.untensor_overwrite.restype  = None
+lib.untensor_overwrite.argtypes = [ctypes.POINTER(UnTensor), ctypes.POINTER(UnTensor), ctypes.c_bool]
+def untensor_overwrite(dst, src, copy_host_data) -> None:
+    """
+    void untensor_overwrite(untensor dst, untensor src, bool copy_host_data)
+    :param dst: 	ctypes.POINTER(UnTensor)
+    :param src: 	ctypes.POINTER(UnTensor)
+    :param copy_host_data: 	ctypes.c_bool
+    """
+    return lib.untensor_overwrite(dst, src, copy_host_data)
 
 lib.untensor_set_data.restype  = None
 lib.untensor_set_data.argtypes = [ctypes.POINTER(UnTensor), ctypes.c_void_p, ctypes.c_size_t, ctypes.c_bool]
@@ -308,88 +510,124 @@ def untensor_show(tensor, start, len, location) -> None:
     """
     return lib.untensor_show(tensor, ctypes.c_int(start), ctypes.c_int(len), location)
 
-lib.runtime_init.restype  = ctypes.c_void_p
-lib.runtime_init.argtypes = [ctypes.c_char_p, ctypes.c_int]
-def runtime_init(bmodel_path, device_id) -> ctypes.c_void_p:
+lib.untensor_s2d_bytes.restype  = None
+lib.untensor_s2d_bytes.argtypes = [ctypes.POINTER(UnTensor), ctypes.c_void_p, ctypes.c_size_t]
+def untensor_s2d_bytes(tensor, data, size) -> None:
     """
-    unruntime runtime_init(const char* bmodel_path, int device_id);
+    void untensor_s2d_bytes(untensor tensor, void* data, size_t size);
+    :param tensor: 	ctypes.POINTER(UnTensor)
+    :param data: 	ctypes.c_void_p
+    :param size: 	ctypes.c_size_t
+    """
+    return lib.untensor_s2d_bytes(tensor, data, ctypes.c_size_t(size))
+
+lib.untensor_d2d_bytes_offset.restype  = None
+lib.untensor_d2d_bytes_offset.argtypes = [ctypes.c_void_p, ctypes.POINTER(UnTensor), ctypes.POINTER(UnTensor), ctypes.c_size_t, ctypes.c_size_t, ctypes.c_size_t]
+def untensor_d2d_bytes_offset(bm_handle, dst_tensor, src_tensor, dst_offset_bytes, src_offset_bytes, size) -> None:
+    """
+    void untensor_d2d_bytes_offset(bm_handle_t bm_handle, untensor dst_tensor, untensor src_tensor, size_t dst_offset_bytes, size_t src_offset_bytes, size_t size);
+    :param bm_handle: 	ctypes.c_void_p
+    :param dst_tensor: 	ctypes.POINTER(UnTensor)
+    :param src_tensor: 	ctypes.POINTER(UnTensor)
+    :param dst_offset_bytes: 	ctypes.c_size_t
+    :param src_offset_bytes: 	ctypes.c_size_t
+    :param size: 	ctypes.c_size_t
+    """
+    return lib.untensor_d2d_bytes_offset(bm_handle, dst_tensor, src_tensor, ctypes.c_size_t(dst_offset_bytes), ctypes.c_size_t(src_offset_bytes), ctypes.c_size_t(size))
+
+lib.unruntime_init.restype  = ctypes.c_void_p
+lib.unruntime_init.argtypes = [ctypes.c_char_p, ctypes.c_int]
+def unruntime_init(bmodel_path, device_id) -> ctypes.c_void_p:
+    """
+    unruntime unruntime_init(const char* bmodel_path, int device_id);
     :param bmodel_path: 	ctypes.c_char_p
     :param device_id: 	ctypes.c_int
     """
-    return lib.runtime_init(str2char_point(bmodel_path), ctypes.c_int(device_id))
+    return lib.unruntime_init(str2char_point(bmodel_path), ctypes.c_int(device_id))
 
-lib.get_net_num.restype  = ctypes.c_size_t
-lib.get_net_num.argtypes = [ctypes.c_void_p, ctypes.c_char]
-def get_net_num(runtime, *net_name) -> ctypes.c_size_t:
+lib.unruntime_get_net_num.restype  = ctypes.c_size_t
+lib.unruntime_get_net_num.argtypes = [ctypes.c_void_p, ctypes.c_char_p]
+def unruntime_get_net_num(runtime, net_name) -> ctypes.c_size_t:
     """
-    size_t get_net_num(unruntime runtime, const char *net_name);
+    size_t unruntime_get_net_num(unruntime runtime, const char* net_name);
     :param runtime: 	ctypes.c_void_p
-    :param *net_name: 	ctypes.c_char
+    :param net_name: 	ctypes.c_char_p
     """
-    return lib.get_net_num(runtime, *net_name)
+    return lib.unruntime_get_net_num(runtime, str2char_point(net_name))
 
-lib.set_net_stage.restype  = None
-lib.set_net_stage.argtypes = [ctypes.c_void_p, ctypes.c_size_t, ctypes.c_size_t]
-def set_net_stage(runtime, net_idx, stage_idx) -> None:
+lib.unruntime_set_net_stage.restype  = None
+lib.unruntime_set_net_stage.argtypes = [ctypes.c_void_p, ctypes.c_size_t, ctypes.c_size_t]
+def unruntime_set_net_stage(runtime, net_idx, stage_idx) -> None:
     """
-    void set_net_stage(unruntime runtime, size_t net_idx, size_t stage_idx);
+    void unruntime_set_net_stage(unruntime runtime, size_t net_idx, size_t stage_idx);
     :param runtime: 	ctypes.c_void_p
     :param net_idx: 	ctypes.c_size_t
     :param stage_idx: 	ctypes.c_size_t
     """
-    return lib.set_net_stage(runtime, ctypes.c_size_t(net_idx), ctypes.c_size_t(stage_idx))
+    return lib.unruntime_set_net_stage(runtime, ctypes.c_size_t(net_idx), ctypes.c_size_t(stage_idx))
 
-lib.get_io_tensor.restype  = ctypes.POINTER(UnTensor)
-lib.get_io_tensor.argtypes = [ctypes.c_void_p, ctypes.c_char, ctypes.c_size_t]
-def get_io_tensor(runtime, io_type, tensor_idx) -> ctypes.POINTER(UnTensor):
+lib.unruntime_get_io_tensor.restype  = ctypes.POINTER(UnTensor)
+lib.unruntime_get_io_tensor.argtypes = [ctypes.c_void_p, ctypes.c_char, ctypes.c_size_t]
+def unruntime_get_io_tensor(runtime, io_type, tensor_idx) -> ctypes.POINTER(UnTensor):
     """
-    untensor get_io_tensor(unruntime runtime, char io_type, size_t tensor_idx);
+    untensor unruntime_get_io_tensor(unruntime runtime, char io_type, size_t tensor_idx);
     :param runtime: 	ctypes.c_void_p
     :param io_type: 	ctypes.c_char
     :param tensor_idx: 	ctypes.c_size_t
     """
-    return lib.get_io_tensor(runtime, io_type, ctypes.c_size_t(tensor_idx))
+    return lib.unruntime_get_io_tensor(runtime, io_type, ctypes.c_size_t(tensor_idx))
 
-lib.get_io_count.restype  = ctypes.c_size_t
-lib.get_io_count.argtypes = [ctypes.c_void_p, ctypes.c_char]
-def get_io_count(runtime, io_type) -> ctypes.c_size_t:
+lib.unruntime_get_io_count.restype  = ctypes.c_size_t
+lib.unruntime_get_io_count.argtypes = [ctypes.c_void_p, ctypes.c_char]
+def unruntime_get_io_count(runtime, io_type) -> ctypes.c_size_t:
     """
-    size_t get_io_count(unruntime runtime, char io_type);
+    size_t unruntime_get_io_count(unruntime runtime, char io_type);
     :param runtime: 	ctypes.c_void_p
     :param io_type: 	ctypes.c_char
     """
-    return lib.get_io_count(runtime, io_type)
+    return lib.unruntime_get_io_count(runtime, io_type)
 
-lib.set_input_s2d.restype  = None
-lib.set_input_s2d.argtypes = [ctypes.c_void_p, ctypes.c_size_t, ctypes.c_void_p, ctypes.c_size_t]
-def set_input_s2d(runtime, tensor_idx, data, size) -> None:
+lib.unruntime_set_input_s2d.restype  = None
+lib.unruntime_set_input_s2d.argtypes = [ctypes.c_void_p, ctypes.c_size_t, ctypes.c_void_p, ctypes.c_size_t]
+def unruntime_set_input_s2d(runtime, tensor_idx, data, size) -> None:
     """
-    void set_input_s2d(unruntime runtime, size_t tensor_idx, void* data, size_t size);
+    void unruntime_set_input_s2d(unruntime runtime, size_t tensor_idx, void* data, size_t size);
     :param runtime: 	ctypes.c_void_p
     :param tensor_idx: 	ctypes.c_size_t
     :param data: 	ctypes.c_void_p
     :param size: 	ctypes.c_size_t
     """
-    return lib.set_input_s2d(runtime, ctypes.c_size_t(tensor_idx), data, ctypes.c_size_t(size))
+    return lib.unruntime_set_input_s2d(runtime, ctypes.c_size_t(tensor_idx), data, ctypes.c_size_t(size))
 
-lib.run.restype  = None
-lib.run.argtypes = [ctypes.c_void_p, ctypes.c_bool]
-def run(runtime, output_to_host) -> None:
+lib.unruntime_set_input_d2d.restype  = None
+lib.unruntime_set_input_d2d.argtypes = [ctypes.c_void_p, ctypes.c_size_t, ctypes.POINTER(UnTensor)]
+def unruntime_set_input_d2d(runtime, tensor_idx, src_tensor) -> None:
     """
-    void run(unruntime runtime, bool output_to_host);
+    void unruntime_set_input_d2d(unruntime runtime, size_t tensor_idx, untensor src_tensor);
+    :param runtime: 	ctypes.c_void_p
+    :param tensor_idx: 	ctypes.c_size_t
+    :param src_tensor: 	ctypes.POINTER(UnTensor)
+    """
+    return lib.unruntime_set_input_d2d(runtime, ctypes.c_size_t(tensor_idx), src_tensor)
+
+lib.unruntime_run.restype  = None
+lib.unruntime_run.argtypes = [ctypes.c_void_p, ctypes.c_bool]
+def unruntime_run(runtime, output_to_host) -> None:
+    """
+    void unruntime_run(unruntime runtime, bool output_to_host);
     :param runtime: 	ctypes.c_void_p
     :param output_to_host: 	ctypes.c_bool
     """
-    return lib.run(runtime, output_to_host)
+    return lib.unruntime_run(runtime, output_to_host)
 
-lib.free_runtime.restype  = None
-lib.free_runtime.argtypes = [ctypes.c_void_p]
-def free_runtime(runtime) -> None:
+lib.unruntime_free.restype  = None
+lib.unruntime_free.argtypes = [ctypes.c_void_p]
+def unruntime_free(runtime) -> None:
     """
-    void free_runtime(unruntime runtime);
+    void unruntime_free(unruntime runtime);
     :param runtime: 	ctypes.c_void_p
     """
-    return lib.free_runtime(runtime)
+    return lib.unruntime_free(runtime)
 
 lib.llm_init.restype  = ctypes.c_void_p
 lib.llm_init.argtypes = [ctypes.c_char_p, ctypes.c_int]
@@ -448,15 +686,6 @@ def llm_get_token_len(llm) -> ctypes.c_size_t:
     """
     return lib.llm_get_token_len(llm)
 
-lib.llm_get_token.restype  = ctypes.c_int
-lib.llm_get_token.argtypes = [ctypes.c_void_p]
-def llm_get_token(llm) -> ctypes.c_int:
-    """
-    int llm_get_token(llmbase llm);
-    :param llm: 	ctypes.c_void_p
-    """
-    return lib.llm_get_token(llm)
-
 lib.print_data_by_fp32.restype  = None
 lib.print_data_by_fp32.argtypes = [ctypes.c_void_p, ctypes.c_int, ctypes.c_int, ctypes.c_int, ctypes.c_int]
 def print_data_by_fp32(data, size, dtype, start, len) -> None:
@@ -491,4 +720,4 @@ def convert_to_fp32(source, dtype) -> ctypes.c_float:
     :param dtype: 	ctypes.c_int
     """
     return lib.convert_to_fp32(source, ctypes.c_int(dtype))
-version='2025-04-07-11-46-16'
+version='2025-04-15-16-00-06'

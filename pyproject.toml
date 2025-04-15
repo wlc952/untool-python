@@ -1,0 +1,35 @@
+[build-system]
+requires = ["setuptools>=61.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "untool"
+version = "0.0.1"
+description = "Union Tool for inference on Sophgo chips"
+readme = "README.md"
+license = { text = "MIT" }
+authors = [
+    { name = "wlc952", email = "wlc952@zju.edu.cn" }
+]
+requires-python = ">=3.8"
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: POSIX :: Linux",
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence"
+]
+dependencies = [
+    "numpy<2.0.0"
+]
+
+[project.urls]
+Homepage = "https://github.com/wlc952/untool-python"
+
+[tool.setuptools.packages.find]
+include = ["untool.*"]
+namespaces = true
+
+[project.scripts]
+untool-info = "untool.tools.info:main"

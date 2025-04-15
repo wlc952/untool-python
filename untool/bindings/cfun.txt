@@ -1,48 +1,109 @@
 struct UnTensor {
-    char name[MAX_CHAR_NUM];
-    int dtype;
-    size_t size;
-    size_t dims;
-    uint64_t shape[MAX_DIMS];
-    void* data;
-    bool is_malloc_host;
-    bool is_have_data;
-    int device_id;
-    bm_handle_t bm_handle;
-    bool is_in_device;
-    u64 addr;
-    u64 device_start;
-    u64 device_size;
-    u64 offset;
-    int dmabuf_fd;
-    unsigned int reserved;
-    unsigned int rawflags;
+    char                    name[MAX_CHAR_NUM];
+    int                     dtype;
+    size_t                  size;
+    size_t                  dims;
+    uint64_t                shape[MAX_SHAPE_NUM];
+    void*                   data;
+    bool                    is_malloc_host;
+    bool                    is_have_data;
+    int                     device_id;
+    bm_handle_t             bm_handle;
+    bool                    is_in_device;
+    u64                     addr;
+    u64                     device_start;
+    u64                     device_size;
+    u64                     offset;
+    int                     dmabuf_fd;
+    unsigned int            reserved;
+    unsigned int            rawflags;
+};
+struct C_DeviceMem {
+    uint64_t                addr;
+    unsigned int            size;
+    unsigned int            reserved;
+    unsigned int            rawflags;
+    int                     dmabuf_fd;
+};
+struct C_TensorInfo {
+    char                    name[MAX_CHAR_NUM];
+    int                     data_type;
+    uint64_t                device_addr;
+    uint64_t                size;
+    size_t                  dims;
+    uint64_t                shape[MAX_SHAPE_NUM];
+};
+struct C_StageInfo {
+    size_t                  input_num;
+    size_t                  output_num;
+    C_TensorInfo            input_tensor[MAX_TENSOR_NUM];
+    C_TensorInfo            output_tensor[MAX_TENSOR_NUM];
+    uint64_t                input_tensor_global_addr[MAX_TENSOR_NUM];
+    uint64_t                output_tensor_global_addr[MAX_TENSOR_NUM];
+    bool                    io_alone;
+    uint64_t                io_addr;
+    uint64_t                io_size;
+    uint64_t                io_offset;
+    uint64_t                io_global_addr;
+    uint64_t                neuron_addr;
+    uint64_t                neuron_size;
+    uint64_t                neuron_offset;
+    C_DeviceMem             io_device;
+};
+struct C_NetInfo {
+    char                    name[MAX_CHAR_NUM];
+    size_t                  stage_num;
+    C_StageInfo             stages[MAX_STAGE_NUM];
+    int                     addr_mode;
+};
+struct C_ModelInfo {
+    int                     device_id;
+    bm_handle_t             bm_handle;
+    size_t                  net_num;
+    C_NetInfo               nets[MAX_NET_NUM];
+    C_DeviceMem             neuron_device;
 };
 
+struct C_ModelInfo* convert_model_info(struct ModelInfo* model_info_p);
+struct ModelInfo* get_model_info_p(const char* filename, int device_id);
+int find_net_num(struct ModelInfo* model_info_p, const char* net_name);
+void* get_first_mask_ptr(size_t seq_len, size_t token_len, bool bf16);
+void* get_next_mask_ptr(size_t seq_len, size_t token_len, bool bf16);
+void free_mask_ptr(void* ptr);
 
-untensor untensor_create();
-untensor untensor_copy(untensor src, bool copy_host_data);
-void untensor_destroy(untensor tensor);
-void untensor_set_data(untensor tensor, void* data, size_t size, bool copy);
-void untensor_sync(untensor tensor, bool to_device, bool force);
-void untensor_show(untensor tensor, int start, int len, char location);
+void move_to_device(struct ModelInfo* model_info_p);
+void compile_io_addr(struct ModelInfo* model_info_p);
+void fill_api_info(struct ModelInfo* model_info_p);
+void run_model(struct ModelInfo* model_info_p, size_t net_idx, size_t stage_idx);
+void free_model(struct ModelInfo* model_info_p);
 
-unruntime runtime_init(const char* bmodel_path, int device_id);
-size_t get_net_num(unruntime runtime, const char *net_name);
-void set_net_stage(unruntime runtime, size_t net_idx, size_t stage_idx);
-untensor get_io_tensor(unruntime runtime, char io_type, size_t tensor_idx);
-size_t get_io_count(unruntime runtime, char io_type);
-void set_input_s2d(unruntime runtime, size_t tensor_idx, void* data, size_t size);
-void run(unruntime runtime, bool output_to_host);
-void free_runtime(unruntime runtime);
+untensor  untensor_create();
+untensor  untensor_copy(untensor src, bool copy_host_data);
+void      untensor_init(untensor tensor);
+void      untensor_destroy(untensor tensor);
+void      untensor_overwrite(untensor dst, untensor src, bool copy_host_data)
+void      untensor_set_data(untensor tensor, void* data, size_t size, bool copy);
+void      untensor_sync(untensor tensor, bool to_device, bool force);
+void      untensor_show(untensor tensor, int start, int len, char location);
+void      untensor_s2d_bytes(untensor tensor, void* data, size_t size);
+void      untensor_d2d_bytes_offset(bm_handle_t bm_handle, untensor dst_tensor, untensor src_tensor, size_t dst_offset_bytes, size_t src_offset_bytes, size_t size);
 
-llmbase  llm_init(const char* model_path, int device_id);
-int llm_forward_first(llmbase llm, int* tokens, size_t token_len);
-int llm_forward_next(llmbase llm);
-void     llm_free(llmbase llm);
-size_t   llm_get_seq_len(llmbase llm);
-size_t   llm_get_token_len(llmbase llm);
-int llm_get_token(llmbase llm);
+unruntime unruntime_init(const char* bmodel_path, int device_id);
+size_t    unruntime_get_net_num(unruntime runtime, const char* net_name);
+void      unruntime_set_net_stage(unruntime runtime, size_t net_idx, size_t stage_idx);
+untensor  unruntime_get_io_tensor(unruntime runtime, char io_type, size_t tensor_idx);
+size_t    unruntime_get_io_count(unruntime runtime, char io_type);
+void      unruntime_set_input_s2d(unruntime runtime, size_t tensor_idx, void* data, size_t size);
+void      unruntime_set_input_d2d(unruntime runtime, size_t tensor_idx, untensor src_tensor);
+void      unruntime_run(unruntime runtime, bool output_to_host);
+void      unruntime_free(unruntime runtime);
+
+llmbase   llm_init(const char* model_path, int device_id);
+int       llm_forward_first(llmbase llm, int* tokens, size_t token_len);
+int       llm_forward_next(llmbase llm);
+void      llm_free(llmbase llm);
+size_t    llm_get_seq_len(llmbase llm);
+size_t    llm_get_token_len(llmbase llm);
 
 void print_data_by_fp32(void* data, int size, int dtype, int start, int len);
 void data_convert_to_fp32(void* src, void* target, int dtype, size_t size);
