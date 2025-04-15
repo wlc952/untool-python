@@ -1,6 +1,6 @@
 import time
 from transformers import AutoTokenizer
-from .LLMBaseModel import LLMBaseModel
+from .llmbasemodel import LLMBaseModel
 
 class LLMBasePipline:
     def __init__(self, args):

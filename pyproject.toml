@@ -21,14 +21,16 @@ classifiers = [
     "Topic :: Scientific/Engineering :: Artificial Intelligence"
 ]
 dependencies = [
-    "numpy<2.0.0"
+    "numpy<2.0.0",
+    "transformers>=4.40.0"
 ]
 
 [project.urls]
 Homepage = "https://github.com/wlc952/untool-python"
 
 [tool.setuptools.packages.find]
-include = ["untool.*"]
+where = ["."]
+include = ["untool*"]
 namespaces = true
 
 [project.scripts]
