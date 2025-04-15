@@ -11,15 +11,33 @@ pip install untool
 ## 使用示例
 
 ```python
-import untool
+from untool import EngineLLM
+import argparse
+parser = argparse.ArgumentParser()
+parser.add_argument('-m', '--model_path', type=str, required=True, help='path to the bmodel file')
+parser.add_argument('-t', '--tokenizer_path', type=str, required=True, help='path to the tokenizer file')
+parser.add_argument('-d', '--devid', type=int, default=0, help='device ID to use')
+parser.add_argument('--generation_mode', type=str, choices=["greedy", "penalty_sample"], default="greedy", help='mode for generating next token')
+parser.add_argument('--enable_history', action='store_true', help="if set, enables storing of history memory")
+args = parser.parse_args()
 
-# 可选: 明确设置模式
-untool.set_mode('pcie')  
+engine = EngineLLM(args)
+engine.chat()
+```
 
-# 使用库功能
-tensor = untool.untensor_create()
-runtime = untool.runtime_init("model.bmodel", 0)
-# 其他操作...
+```python
+from untool import EngineOV
+net = EngineOV("rmbg.bmodel", device_id=0)
+
+# Prepare input
+image = preprocess_image(orig_image, model_input_size)
+
+# Inference 
+result = net([image])[0]
+
+# Post process    
+result_image = postprocess_image(result, orig_im_size)
+
 ```
 
 ## 其他
