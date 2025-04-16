@@ -83,10 +83,10 @@ __all__ = [
     "unruntime_run",
     "unruntime_free",
     # Python API
-    "EngineELM",
+    "EngineLLM",
     "EngineOV",
-    "llmbasemodel",
-    "llmbasepipeline",
+    "LLMBaseModel",
+    "LLMBasePipline",
     # utils
     "get_lib_path",
     "type_map",
