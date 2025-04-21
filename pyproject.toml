@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "untool"
-version = "0.0.6"
+version = "0.0.7"
 description = "Union Tool for inference on Sophgo chips"
 readme = "README.md"
 license = { text = "MIT" }
@@ -22,7 +22,11 @@ classifiers = [
 ]
 dependencies = [
     "numpy<2.0.0",
-    "transformers>=4.40.0"
+    "transformers>=4.40.0",
+    "sentencepiece",
+    "torch",
+    "torchvision",
+    "pillow"
 ]
 
 [project.urls]

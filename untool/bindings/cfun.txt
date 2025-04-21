@@ -67,9 +67,6 @@ struct C_ModelInfo {
 struct C_ModelInfo* convert_model_info(struct ModelInfo* model_info_p);
 struct ModelInfo* get_model_info_p(const char* filename, int device_id);
 int find_net_num(struct ModelInfo* model_info_p, const char* net_name);
-void* get_first_mask_ptr(size_t seq_len, size_t token_len, bool bf16);
-void* get_next_mask_ptr(size_t seq_len, size_t token_len, bool bf16);
-void free_mask_ptr(void* ptr);
 
 void move_to_device(struct ModelInfo* model_info_p);
 void compile_io_addr(struct ModelInfo* model_info_p);
@@ -78,15 +75,14 @@ void run_model(struct ModelInfo* model_info_p, size_t net_idx, size_t stage_idx)
 void free_model(struct ModelInfo* model_info_p);
 
 untensor  untensor_create();
-untensor  untensor_copy(untensor src, bool copy_host_data);
-void      untensor_init(untensor tensor);
 void      untensor_destroy(untensor tensor);
-void      untensor_overwrite(untensor dst, untensor src, bool copy_host_data)
 void      untensor_set_data(untensor tensor, void* data, size_t size, bool copy);
 void      untensor_sync(untensor tensor, bool to_device, bool force);
 void      untensor_show(untensor tensor, int start, int len, char location);
 void      untensor_s2d_bytes(untensor tensor, void* data, size_t size);
 void      untensor_d2d_bytes_offset(bm_handle_t bm_handle, untensor dst_tensor, untensor src_tensor, size_t dst_offset_bytes, size_t src_offset_bytes, size_t size);
+untensor  untensor_malloc_device(bm_handle_t bm_handle, size_t size);
+void      untensor_free_device(untensor tensor);
 
 unruntime unruntime_init(const char* bmodel_path, int device_id);
 size_t    unruntime_get_net_num(unruntime runtime, const char* net_name);

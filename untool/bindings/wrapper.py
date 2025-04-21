@@ -351,37 +351,6 @@ def find_net_num(model_info_p, net_name) -> ctypes.c_int:
     """
     return lib.find_net_num(model_info_p, str2char_point(net_name))
 
-lib.get_first_mask_ptr.restype  = ctypes.c_void_p
-lib.get_first_mask_ptr.argtypes = [ctypes.c_size_t, ctypes.c_size_t, ctypes.c_bool]
-def get_first_mask_ptr(seq_len, token_len, bf16) -> ctypes.c_void_p:
-    """
-    void* get_first_mask_ptr(size_t seq_len, size_t token_len, bool bf16);
-    :param seq_len: 	ctypes.c_size_t
-    :param token_len: 	ctypes.c_size_t
-    :param bf16: 	ctypes.c_bool
-    """
-    return lib.get_first_mask_ptr(ctypes.c_size_t(seq_len), ctypes.c_size_t(token_len), bf16)
-
-lib.get_next_mask_ptr.restype  = ctypes.c_void_p
-lib.get_next_mask_ptr.argtypes = [ctypes.c_size_t, ctypes.c_size_t, ctypes.c_bool]
-def get_next_mask_ptr(seq_len, token_len, bf16) -> ctypes.c_void_p:
-    """
-    void* get_next_mask_ptr(size_t seq_len, size_t token_len, bool bf16);
-    :param seq_len: 	ctypes.c_size_t
-    :param token_len: 	ctypes.c_size_t
-    :param bf16: 	ctypes.c_bool
-    """
-    return lib.get_next_mask_ptr(ctypes.c_size_t(seq_len), ctypes.c_size_t(token_len), bf16)
-
-lib.free_mask_ptr.restype  = None
-lib.free_mask_ptr.argtypes = [ctypes.c_void_p]
-def free_mask_ptr(ptr) -> None:
-    """
-    void free_mask_ptr(void* ptr);
-    :param ptr: 	ctypes.c_void_p
-    """
-    return lib.free_mask_ptr(ptr)
-
 lib.move_to_device.restype  = None
 lib.move_to_device.argtypes = [ctypes.c_void_p]
 def move_to_device(model_info_p) -> None:
@@ -436,25 +405,6 @@ def untensor_create() -> ctypes.POINTER(UnTensor):
     """
     return lib.untensor_create()
 
-lib.untensor_copy.restype  = ctypes.POINTER(UnTensor)
-lib.untensor_copy.argtypes = [ctypes.POINTER(UnTensor), ctypes.c_bool]
-def untensor_copy(src, copy_host_data) -> ctypes.POINTER(UnTensor):
-    """
-    untensor untensor_copy(untensor src, bool copy_host_data);
-    :param src: 	ctypes.POINTER(UnTensor)
-    :param copy_host_data: 	ctypes.c_bool
-    """
-    return lib.untensor_copy(src, copy_host_data)
-
-lib.untensor_init.restype  = None
-lib.untensor_init.argtypes = [ctypes.POINTER(UnTensor)]
-def untensor_init(tensor) -> None:
-    """
-    void untensor_init(untensor tensor);
-    :param tensor: 	ctypes.POINTER(UnTensor)
-    """
-    return lib.untensor_init(tensor)
-
 lib.untensor_destroy.restype  = None
 lib.untensor_destroy.argtypes = [ctypes.POINTER(UnTensor)]
 def untensor_destroy(tensor) -> None:
@@ -463,17 +413,6 @@ def untensor_destroy(tensor) -> None:
     :param tensor: 	ctypes.POINTER(UnTensor)
     """
     return lib.untensor_destroy(tensor)
-
-lib.untensor_overwrite.restype  = None
-lib.untensor_overwrite.argtypes = [ctypes.POINTER(UnTensor), ctypes.POINTER(UnTensor), ctypes.c_bool]
-def untensor_overwrite(dst, src, copy_host_data) -> None:
-    """
-    void untensor_overwrite(untensor dst, untensor src, bool copy_host_data)
-    :param dst: 	ctypes.POINTER(UnTensor)
-    :param src: 	ctypes.POINTER(UnTensor)
-    :param copy_host_data: 	ctypes.c_bool
-    """
-    return lib.untensor_overwrite(dst, src, copy_host_data)
 
 lib.untensor_set_data.restype  = None
 lib.untensor_set_data.argtypes = [ctypes.POINTER(UnTensor), ctypes.c_void_p, ctypes.c_size_t, ctypes.c_bool]
@@ -534,6 +473,25 @@ def untensor_d2d_bytes_offset(bm_handle, dst_tensor, src_tensor, dst_offset_byte
     :param size: 	ctypes.c_size_t
     """
     return lib.untensor_d2d_bytes_offset(bm_handle, dst_tensor, src_tensor, ctypes.c_size_t(dst_offset_bytes), ctypes.c_size_t(src_offset_bytes), ctypes.c_size_t(size))
+
+lib.untensor_malloc_device.restype  = ctypes.POINTER(UnTensor)
+lib.untensor_malloc_device.argtypes = [ctypes.c_void_p, ctypes.c_size_t]
+def untensor_malloc_device(bm_handle, size) -> ctypes.POINTER(UnTensor):
+    """
+    untensor untensor_malloc_device(bm_handle_t bm_handle, size_t size);
+    :param bm_handle: 	ctypes.c_void_p
+    :param size: 	ctypes.c_size_t
+    """
+    return lib.untensor_malloc_device(bm_handle, ctypes.c_size_t(size))
+
+lib.untensor_free_device.restype  = None
+lib.untensor_free_device.argtypes = [ctypes.POINTER(UnTensor)]
+def untensor_free_device(tensor) -> None:
+    """
+    void untensor_free_device(untensor tensor);
+    :param tensor: 	ctypes.POINTER(UnTensor)
+    """
+    return lib.untensor_free_device(tensor)
 
 lib.unruntime_init.restype  = ctypes.c_void_p
 lib.unruntime_init.argtypes = [ctypes.c_char_p, ctypes.c_int]
@@ -720,4 +678,4 @@ def convert_to_fp32(source, dtype) -> ctypes.c_float:
     :param dtype: 	ctypes.c_int
     """
     return lib.convert_to_fp32(source, ctypes.c_int(dtype))
-version='2025-04-15-16-00-06'
+version='2025-04-21-19-00-56'

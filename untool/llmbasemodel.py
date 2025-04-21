@@ -1,4 +1,5 @@
 import ctypes
+import numpy as np
 from .bindings.wrapper import (
     get_model_info_p,
     convert_model_info,
@@ -8,14 +9,13 @@ from .bindings.wrapper import (
     run_model,
     free_model,
     find_net_num,
-    get_first_mask_ptr,
-    get_next_mask_ptr,
-    free_mask_ptr,
     untensor_create,
     untensor_destroy,
     untensor_sync,
     untensor_s2d_bytes,
-    untensor_d2d_bytes_offset,)
+    untensor_d2d_bytes_offset,
+    untensor_malloc_device,
+    untensor_free_device,)
 
 
 class LLMBaseModel:
@@ -130,19 +130,18 @@ class LLMBaseModel:
     def forward_first(self, input_ids):
         self.token_length = len(input_ids)
         # 参数1 input_ids
-        input_ids = input_ids + [0] * (self.SEQLEN - self.token_length)
-        c_input_ids = (ctypes.c_int * len(input_ids))(*input_ids)
-        input_ids_ptr = ctypes.cast(c_input_ids, ctypes.c_void_p)
+        input_ids_np = np.array(input_ids, dtype=np.int32)
+        if input_ids_np.shape[0] < self.SEQLEN:
+            input_ids_np = np.pad(input_ids_np, (0, self.SEQLEN - input_ids_np.shape[0]), mode='constant', constant_values=0)
+        input_ids_ptr = ctypes.c_void_p(input_ids_np.ctypes.data)
 
         # 参数2 position_id
-        position_id = [0] * self.SEQLEN
-        for i in range(self.token_length):
-            position_id[i] = i
-        c_position_id = (ctypes.c_int * len(position_id))(*position_id)
-        position_id_ptr = ctypes.cast(c_position_id, ctypes.c_void_p)
+        position_id_np = np.zeros(self.SEQLEN, dtype=np.int32)
+        position_id_np[:self.token_length] = np.arange(self.token_length, dtype=np.int32)
+        position_id_ptr = ctypes.c_void_p(position_id_np.ctypes.data)
 
         # 参数3 attention_mask
-        attn_mask_ptr = get_first_mask_ptr(self.SEQLEN, self.token_length, self.is_bf16)
+        attn_mask_ptr = self.get_first_mask_ptr(self.SEQLEN, self.token_length, self.is_bf16)
 
         # 网络1 embedding
         in_tensor = self.input_tensors[self.embedding_idx][0]
@@ -184,15 +183,12 @@ class LLMBaseModel:
         untensor_sync(token_tensor, False, True)
         token = ctypes.cast(token_tensor.contents.data, ctypes.POINTER(ctypes.c_int32)).contents.value
         self.token_length += 1
-        free_mask_ptr(attn_mask_ptr)
         return token
 
     def forward_next(self):
-        position_id = [self.token_length - 1]
-        c_position_id = (ctypes.c_int * len(position_id))(*position_id)
-        position_id_ptr = ctypes.cast(c_position_id, ctypes.c_void_p)
-
-        attn_mask_ptr = get_next_mask_ptr(self.SEQLEN, self.token_length, self.is_bf16)
+        position_id = np.array([self.token_length - 1], dtype=np.int32)
+        position_id_ptr = ctypes.c_void_p(position_id.ctypes.data)
+        attn_mask_ptr = self.get_next_mask_ptr(self.SEQLEN, self.token_length, self.is_bf16)
 
         # 网络1 embedding_cache
         if self.greedy_head_idx != -1 and self.generation_mode == 'greedy':
@@ -241,8 +237,27 @@ class LLMBaseModel:
         untensor_sync(token_tensor, False, True)
         token = ctypes.cast(token_tensor.contents.data, ctypes.POINTER(ctypes.c_int32)).contents.value
         self.token_length += 1
-        free_mask_ptr(attn_mask_ptr)
         return token
+
+    def get_first_mask_ptr(self, seq_len, token_len, bf16):
+        if bf16:
+            MASK = 0xC61C
+        else:
+            MASK = 0xF0E2
+        self._attn_mask = np.full((seq_len, seq_len), MASK, dtype=np.uint16)
+        rows = np.arange(token_len).reshape(-1, 1)
+        cols = np.arange(seq_len).reshape(1, -1)
+        self._attn_mask[:token_len, :] = np.where(cols <= rows, 0, self._attn_mask[:token_len, :])
+        return ctypes.c_void_p(self._attn_mask.ctypes.data)
+
+    def get_next_mask_ptr(self, seq_len, token_len, bf16):
+        if bf16:
+            MASK = 0xC61C  # 代表 bfloat16 格式下的 -9984
+        else:
+            MASK = 0xF0E2  # 代表 float16 格式下的 -9984
+        self._attn_mask = np.zeros(seq_len + 1, dtype=np.uint16)
+        self._attn_mask[token_len - 1 : seq_len] = MASK
+        return ctypes.c_void_p(self._attn_mask.ctypes.data)
 
     def _close(self):
         free_model(self.model_info_p)
@@ -257,20 +272,88 @@ class LLMBaseModel:
         self._close()
 
 
-if __name__ == "__main__":
-    import time
-    start = time.time()
-    llm = LLMBaseModel("/data/qwen2.5-3b_int4_seq4096_1dev.bmodel")
-    print("load time:", time.time() - start)
-    input_ids = [1, 73441, 1836, 5, 23523, 73440, 5, 73441, 43686, 5]
+class MiniCPMV(LLMBaseModel):
+    def __init__(self, model_path, device_id=0, quant_type='bf16', generation_mode='greedy'):
+        super().__init__(model_path, device_id, quant_type, generation_mode)
+        self.vision_encoder_idx = find_net_num(self.model_info_p, 'vision_encoder')
+        self.IMAGE_BYTES = self.input_tensors[self.vision_encoder_idx][0].contents.size
+        self.HIDDEN_SIZE = self.input_tensors[self.lm_head_idx][0].contents.shape[1]
+        self.dev_buffer_tensor = untensor_malloc_device(self.bm_handle, self.output_tensors[self.embedding_idx][0].contents.size)
 
-    start = time.time()
-    token = llm.forward_first(input_ids)
-    print(token)
-    print("forward_first time:", time.time() - start)
+    def forward_first(self, input_ids, pixel_values, img_offsets, patch_num):
+        self.token_length = len(input_ids)
+        # 参数1 input_ids
+        input_ids_np = np.array(input_ids, dtype=np.int32)
+        if input_ids_np.shape[0] < self.SEQLEN:
+            input_ids_np = np.pad(input_ids_np, (0, self.SEQLEN - input_ids_np.shape[0]), mode='constant', constant_values=0)
+        input_ids_ptr = ctypes.c_void_p(input_ids_np.ctypes.data)
 
-    for i in range(10):
-        start = time.time()
-        token = llm.forward_next()
-        print(token)
-        print("forward_next time:", time.time() - start)
+        # 参数2 position_id
+        position_id_np = np.zeros(self.SEQLEN, dtype=np.int32)
+        position_id_np[:self.token_length] = np.arange(self.token_length, dtype=np.int32)
+        position_id_ptr = ctypes.c_void_p(position_id_np.ctypes.data)
+
+        # 参数3 attention_mask
+        attn_mask_ptr = self.get_first_mask_ptr(self.SEQLEN, self.token_length, self.is_bf16)
+
+        # 网络1 embedding
+        in_tensor = self.input_tensors[self.embedding_idx][0]
+        out_tensor = self.output_tensors[self.embedding_idx][0]
+
+        self.s2d_bytes(in_tensor, input_ids_ptr, 4 * self.SEQLEN)
+        run_model(self.model_info_p, self.embedding_idx, 0)
+        
+        # 网络x vision_encoder
+        pixel_values = np.ascontiguousarray(pixel_values, dtype=np.float32)
+        patch_size = self.output_tensors[self.vision_encoder_idx][0].contents.shape[1]
+        type_byte = 2  # sizeof(uint16_t)
+
+        if patch_num > 0 and len(pixel_values) * 4 == patch_num * self.IMAGE_BYTES and len(img_offsets) > 0:
+            self.d2d_bytes_offset(self.dev_buffer_tensor, out_tensor, 0, 0, out_tensor.contents.size)
+            out_tensor = self.dev_buffer_tensor
+            vit_out_size = self.output_tensors[self.vision_encoder_idx][0].contents.size
+            for i in range(patch_num):
+                patch_pixel_values_ptr = ctypes.c_void_p(pixel_values.ctypes.data + i * self.IMAGE_BYTES) # Compute the memory address offset for the i-th patch
+                self.s2d_bytes(self.input_tensors[self.vision_encoder_idx][0], patch_pixel_values_ptr, self.IMAGE_BYTES)
+                run_model(self.model_info_p, self.vision_encoder_idx, 0)
+                dst_offset = img_offsets[i * patch_size] * self.HIDDEN_SIZE * type_byte
+                self.d2d_bytes_offset(out_tensor, self.output_tensors[self.vision_encoder_idx][0], dst_offset, 0, vit_out_size)
+
+        # 网络2 attention blocks
+        for i in range(self.num_layers):
+            net_id = self.block_ids[i]
+            self.d2d_bytes_offset(self.input_tensors[net_id][0], out_tensor, 0, 0, out_tensor.contents.size)
+            if i == 0:
+                self.s2d_bytes(self.input_tensors[net_id][1], position_id_ptr, 4 * self.SEQLEN)
+                self.s2d_bytes(self.input_tensors[net_id][2], attn_mask_ptr, 2 * self.SEQLEN * self.SEQLEN)
+            run_model(self.model_info_p, net_id, 0)
+            out_tensor = self.output_tensors[net_id][0]
+            cache_id = self.block_cache_ids[i]
+            self.d2d_bytes_offset(self.input_tensors[cache_id][3], self.output_tensors[net_id][1], 0, 0, self.output_tensors[net_id][1].contents.size)
+            self.d2d_bytes_offset(self.input_tensors[cache_id][4], self.output_tensors[net_id][2], 0, 0, self.output_tensors[net_id][2].contents.size)
+        
+        # 网络2 lm_head
+        bytes_size = out_tensor.contents.size // self.SEQLEN
+        src_offset = bytes_size * (self.token_length - 1)
+
+        token_tensor = self.output_tensors[self.lm_head_idx][0]
+        self.d2d_bytes_offset(self.input_tensors[self.lm_head_idx][0], out_tensor, 0, src_offset, bytes_size)
+        run_model(self.model_info_p, self.lm_head_idx, 0)
+
+        # greedy_head
+        if self.greedy_head_idx != -1 and self.generation_mode == 'greedy':
+            self.d2d_bytes_offset(self.input_tensors[self.greedy_head_idx][0], token_tensor, 0, 0, token_tensor.contents.size)
+            run_model(self.model_info_p, self.greedy_head_idx, 0)
+            token_tensor = self.output_tensors[self.greedy_head_idx][0]
+        
+        # penalty_sample_head
+        # todo
+        
+        untensor_sync(token_tensor, False, True)
+        token = ctypes.cast(token_tensor.contents.data, ctypes.POINTER(ctypes.c_int32)).contents.value
+        self.token_length += 1
+        return token
+    
+    def __del__(self):
+        self._close()
+        untensor_free_device(self.dev_buffer_tensor)
