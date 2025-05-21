@@ -8,21 +8,21 @@ from PIL import Image
 
 class LLMBasePipeline:
     def __init__(self, args):
-        self.device = args.devid
-        self.enable_history = args.enable_history
-        self.generation_mode = args.generation_mode
+        self.model_path = args.model_path
+        self.device = getattr(args, "devid", 0)
+        self.enable_history = getattr(args, "enable_history", False)
+        self.generation_mode = getattr(args, "generation_mode", "greedy")
+        self.quant_type = getattr(args, "quant_type", "bf16")
         self.system_prompt = "You are a helpful assistant."
-        # self.history = [{"role": "system", "content": self.system_prompt}]
-        self.history = []
+        self.history = [{"role": "system", "content": self.system_prompt}]
 
         self.tokenizer = AutoTokenizer.from_pretrained(args.tokenizer_path, trust_remote_code=True)
         self.tokenizer.decode([0]) # warm up
         self.EOS = self.tokenizer.eos_token_id
-        self.model = LLMBaseModel(model_path=args.model_path, device_id=self.device, quant_type='bf16', generation_mode=self.generation_mode)
+        self.model = LLMBaseModel(model_path=self.model_path, device_id=self.device, quant_type=self.quant_type, generation_mode=self.generation_mode)
 
     def clear(self):
-        # self.history = [{"role": "system", "content": self.system_prompt}]
-        self.history = []
+        self.history = [{"role": "system", "content": self.system_prompt}]
 
 
     def update_history(self):
@@ -107,16 +107,17 @@ class LLMBasePipeline:
 
 class MiniCPMVPipeline:
     def __init__(self, args):
-        self.device = args.devid
-        self.generation_mode = args.generation_mode
+        self.model_path = args.model_path
+        self.device = getattr(args, "devid", 0)
+        self.generation_mode = getattr(args, "generation_mode", "greedy")
+        self.quant_type = getattr(args, "quant_type", "bf16")
         self.processor = AutoProcessor.from_pretrained(args.tokenizer_path, trust_remote_code=True)
         self.tokenizer = self.processor.tokenizer
         self.tokenizer.decode([0])
         self.ID_IM_END = self.tokenizer.convert_tokens_to_ids("<|im_end|>")
         self.ID_EOS = [self.tokenizer.eos_token_id, self.ID_IM_END]
         self.MAX_SLICE_NUMS = self.processor.image_processor.max_slice_nums
-
-        self.model = MiniCPMV(model_path=args.model_path, device_id=self.device, quant_type='bf16', generation_mode=self.generation_mode)
+        self.model = MiniCPMV(model_path=self.model_path, device_id=self.device, quant_type=self.quant_type, generation_mode=self.generation_mode)
     
     def encode_with_image(self):
         inserted_image_str = "(<image>./</image>)\n"

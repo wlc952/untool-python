@@ -39,6 +39,9 @@ class LLMBaseModel:
         self._init_layers()
         self._init_tensors()
 
+        self.free_model = free_model
+        self.untensor_destroy = untensor_destroy
+
     def _init_device(self):
         move_to_device(self.model_info_p)
         compile_io_addr(self.model_info_p)
@@ -260,13 +263,15 @@ class LLMBaseModel:
         return ctypes.c_void_p(self._attn_mask.ctypes.data)
 
     def _close(self):
-        free_model(self.model_info_p)
-        for i in self.input_tensors:
-            for j in i:
-                untensor_destroy(j)
-        for i in self.output_tensors:
-            for j in i:
-                untensor_destroy(j)
+        if hasattr(self, 'model_info_p') and self.model_info_p:
+            self.free_model(self.model_info_p)
+            for i in self.input_tensors:
+                for j in i:
+                    self.untensor_destroy(j)
+            for i in self.output_tensors:
+                for j in i:
+                    self.untensor_destroy(j)
+            self.model_info_p = None
 
     def __del__(self):
         self._close()
@@ -279,6 +284,7 @@ class MiniCPMV(LLMBaseModel):
         self.IMAGE_BYTES = self.input_tensors[self.vision_encoder_idx][0].contents.size
         self.HIDDEN_SIZE = self.input_tensors[self.lm_head_idx][0].contents.shape[1]
         self.dev_buffer_tensor = untensor_malloc_device(self.bm_handle, self.output_tensors[self.embedding_idx][0].contents.size)
+        self.untensor_free_device = untensor_free_device
 
     def forward_first(self, input_ids, pixel_values, img_offsets, patch_num):
         self.token_length = len(input_ids)
@@ -356,4 +362,4 @@ class MiniCPMV(LLMBaseModel):
     
     def __del__(self):
         self._close()
-        untensor_free_device(self.dev_buffer_tensor)
+        self.untensor_free_device(self.dev_buffer_tensor)

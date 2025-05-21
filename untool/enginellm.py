@@ -1,21 +1,19 @@
 import time
-from transformers import AutoProcessor, AutoTokenizer
+from transformers import AutoTokenizer
 from .bindings.wrapper import llm_init, llm_free, llm_forward_first, llm_forward_next, llm_get_seq_len
 
 
 class EngineLLM():
     def __init__(self, args):
         self.device = args.devid
-        self.enable_history = args.enable_history
-        self.generation_mode = args.generation_mode
         self.prompt = {"role":"system", "content":"You are a helpful assistant."}
-        self.history = []
-
+        self.history = [self.prompt]
         self.tokenizer = AutoTokenizer.from_pretrained(args.tokenizer_path, trust_remote_code=True)
         self.tokenizer.decode([0]) # warm up
         self.ID_EOS = [self.tokenizer.eos_token_id]
         self.llmbase = llm_init(args.model_path, self.device)
         self.SEQLEN = llm_get_seq_len(self.llmbase)
+        self.llm_free = llm_free
 
 
     def encode_with_tokenizer(self):
@@ -25,7 +23,7 @@ class EngineLLM():
         self.token_len = len(self.input_ids)
 
     def clear(self):
-        self.history = []
+        self.history = [self.prompt]
 
     def chat(self):
         print(
@@ -69,7 +67,9 @@ class EngineLLM():
             self.clear()
         
     def close(self):
-        llm_free(self.llmbase)
+        if hasattr(self, 'llmbase') and self.llmbase:
+            self.llm_free(self.llmbase)
+            self.llmbase = None
 
     def __del__(self):
         self.close()
@@ -80,8 +80,6 @@ if __name__ == "__main__":
     parser.add_argument('-m', '--model_path', type=str, required=True, help='path to the bmodel file')
     parser.add_argument('-t', '--tokenizer_path', type=str, required=True, help='path to the tokenizer file')
     parser.add_argument('-d', '--devid', type=int, default=0, help='device ID to use')
-    parser.add_argument('--generation_mode', type=str, choices=["greedy", "penalty_sample"], default="greedy", help='mode for generating next token')
-    parser.add_argument('--enable_history', action='store_true', help="if set, enables storing of history memory")
     args = parser.parse_args()
 
     engine = EngineLLM(args)
