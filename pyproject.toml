@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "untool"
-version = "0.2.0"
+version = "0.2.1"
 description = "Union Tool for inference on Sophgo chips"
 readme = "README.md"
 license = { text = "MIT" }
